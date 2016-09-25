@@ -1,0 +1,205 @@
+---
+title: "Predictive Text Models. Exploratory Analysis."
+author: "Artem Larionov"
+date: "August 29, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Summary
+This is an exploratory analysis of the `Switf Key` dataset. The goal of the analysis is to determine the features which can be used for predicting models. Based on the analysis, it seems the frequencies of ngrams are useful characteristics for future predictive model. 
+
+# Retrieving the data
+
+We will download the archive from the URL provided by Coursera and extract data from it.
+
+```{r}
+setwd('~/coursera/capstone')
+url <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+
+if (!file.exists("./Coursera-SwiftKey.zip")) { download.file(url, "./Coursera-SwiftKey.zip") }
+if (!file.exists("./final")) { unzip("./Coursera-SwiftKey.zip") }
+
+list.files("./final", include.dirs=FALSE, recursive=TRUE)
+```
+
+We can see that the archive contains 3 different datasets(blogs, news and tweets) for 4 different languages (de, en, fi, ru).
+We will concentrate on english language, so we will use only data from `en_US` directory.
+
+# Reading the data
+
+We will read data from different files into 3 different variables `blogs`, `news` and `tweets`, skipping empty lines of the documents.
+
+```{r, cache=TRUE}
+blogs  <- readLines('final/en_US/en_US.blogs.txt',   skipNul = TRUE)
+news   <- readLines('final/en_US/en_US.news.txt',    skipNul = TRUE)
+tweets <- readLines('final/en_US/en_US.twitter.txt', skipNul = TRUE)
+```
+
+# Basis Information
+
+Let's see how big those documents are and how many lines of text they contain.
+
+```{r}
+files_stats <- rbind(
+  c('blogs',  format(object.size(blogs),  units = 'MB'), length(blogs)),
+  c('news',   format(object.size(news),   units = 'MB'), length(news)),
+  c('tweets', format(object.size(tweets), units = 'MB'), length(tweets))
+)
+colnames(files_stats) <- c('File name', 'Size', '# of lines')
+
+knitr::kable(files_stats, caption = 'File statistics')
+```
+
+Let's take a look what's in those files.
+
+```{r}
+head(blogs, n=3)
+head(news, n=3)
+head(tweets, n=3)
+```
+
+# Ngrams Stats
+
+Now let's go deeper and see if frequency of different words and phrases can help us to build a strategy for our model.
+
+## Loading libraries
+
+```{r, message=FALSE}
+options(java.parameters = "-Xmx8192m")
+library(rJava)
+library(tm)
+library(RWeka)
+library(SnowballC)  
+library(stringr)
+```
+
+## Preparing the data
+
+The data can contain a lot of infromation we don't really need right now, such as numbers, punctuatons and words and characters from other languagues. We also have to prepare our training and test data the same way, so it's better to write a function for it. 
+
+Below is a list of steps we need to do to clean our data:
+
+* remove all non-english characters (we will use `iconv` function to convert the text to `latin1`, removing all non-convertible bytes)
+* convert all characters to lower case
+* remove punctuations
+* remove numbers
+* remove extra whitespace characters
+* remove whitespace characters from the beggining and the end of the string
+
+```{r}
+prepareString <- function (x) {
+  x <- iconv(x, 'latin1', 'ASCII', sub='')
+  x <- tolower(x)
+  x <- removePunctuation(x)
+  x <- removeNumbers(x)
+  x <- stripWhitespace(x)
+  str_trim(x)
+}
+```
+
+We also will add a function to create a `Document Term Matrix` to make our code cleaner.
+
+```{r}
+buildDTMatrix <- function (corpus, n, language = 'english') {
+  DocumentTermMatrix(
+    corpus, 
+    control = list(
+      tokenize = function(x) {
+        NGramTokenizer(x, Weka_control(min = n, max = n))
+      },
+      language = language,
+      stemWords = FALSE
+    )
+  )
+}
+```
+
+## Preparing training dataset
+
+Different text formats can have their own specifics for words and phrases' frequencies, to get a common understanding we will combine all documents we have together.
+We also have to limit the amout of data we will put into our training set because of memory and time limits.
+We will take 100.000 random lines from combined dataset.
+
+```{r, cache=TRUE}
+all <- c(blogs, news, tweets)
+
+set.seed(1)
+inTrain  <- sample(length(all), 100000)
+training <- all[inTrain]
+```
+
+We will also collapse all documents into one, to get one row with a summed up freuquency for every word.
+
+```{r}
+corpus <- Corpus(VectorSource(paste(training, collapse = ' ')))
+corpus <- tm_map(corpus, prepareString)
+corpus <- tm_map(corpus, PlainTextDocument)
+```
+
+# Calculating ngrams' frequencies
+
+We will calculate frequencies for 1,2 and 3-grams.
+
+```{r, cache=TRUE}
+options(mc.cores=1)
+
+unigram_dtm <- buildDTMatrix(corpus, 1)
+bigram_dtm  <- buildDTMatrix(corpus, 2)
+trigram_dtm <- buildDTMatrix(corpus, 3)
+```
+
+Let's sort it, to how fast the frequencies decline.
+
+```{r, cache=TRUE}
+matrix <- as.matrix(unigram_dtm)
+uni_sorted <- matrix[1,order(matrix[1,], decreasing = TRUE)]
+
+matrix <- as.matrix(bigram_dtm)
+bi_sorted <- matrix[1,order(matrix[1,], decreasing = TRUE)]
+
+matrix <- as.matrix(trigram_dtm)
+tri_sorted <- matrix[1,order(matrix[1,], decreasing = TRUE)]
+```
+
+# Plotting the frequencies
+
+```{r}
+barplot(uni_sorted[1:200], main = 'Single word frequency')
+barplot(bi_sorted[1:200],  main = 'BiGram frequency')
+barplot(tri_sorted[1:200], main = 'TriGram frequency')
+```
+
+# Coverage
+
+We can see than frequencies for ngrams decline very fast. Let's check what percentage of ngrams can cover 70% of the text.
+
+```{r}
+coverage <- rbind(
+  c(round(1600 * 100 / length(uni_sorted)), round(sum(uni_sorted[1:1600]) * 100 / sum(uni_sorted))),
+  c(round(250000 * 100 / length(bi_sorted)), round(sum(bi_sorted[1:250000]) * 100 / sum(bi_sorted))),
+  c(round(1180000 * 100 / length(tri_sorted)), round(sum(tri_sorted[1:1180000]) * 100 / sum(tri_sorted)))
+)
+
+colnames(coverage) <- c('percent of ngrams', 'coverage')
+rownames(coverage) <- c('unigrams', 'bigrams', 'trigrams')
+
+knitr::kable(coverage, caption = 'Coverage')
+```
+
+# Conclusion
+
+We can see that frequencies for ngrams decline very fast (especially for unigrams and bigrams), it means that having just small fraction of all ngrams is enough to cover major part of a text. With frequencies we've got we can build a model, using Stupid Back-off algorithm, which is presented by formula: 
+$$P(\omega_{i}|\omega^{i-1}_{i-k+1})= 
+\begin{cases}
+    p(\omega^{i}_{i-k+1}),& \text{if } (\omega^{i}_{i-k+1}) \text{ is found}\\
+    \lambda(\omega^{i-1}_{i-k+1})P(\omega^{i}_{i-k+2}), & \text{otherwise} 
+\end{cases}$$
+
+Where $p(\cdot)$ are pre-computed and stored probabilities, and $\lambda(\cdot)$ are back-off weights[^1].
+
+[^1]:
+[Large Language Models in Machine Translation](http://www.aclweb.org/anthology/D07-1090.pdf)

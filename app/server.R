@@ -6,7 +6,7 @@ load('uni_freq.rds')
 load('bi_freq.rds')
 load('tri_freq.rds')
 
-uni_normalized <- uni_sorted / (max(uni_sorted) - min(uni_sorted))
+#uni_normalized <- uni_sorted / (max(uni_sorted) - min(uni_sorted))
 bi_normalized  <- bi_sorted  / (max(bi_sorted)  - min(bi_sorted))
 tri_normalized <- tri_sorted / (max(tri_sorted) - min(tri_sorted))
 
@@ -87,6 +87,17 @@ predict.words <- function (text) {
 
 function (input, output) {
   output$predictions <- reactive({
-    paste(head(predict.words(input$text), n = 3), collapse = ', ')
+    if (input$text != '') {
+      predictions <- predict.words(input$text)
+      if (length(predictions) > 0) {
+        paste(sapply(head(predictions, n = 3), function(x) { getLastNgram(x, 1) }), collapse = ', ')
+      }
+      else {
+        ''
+      }
+    } 
+    else {
+      ''  
+    }
   })
 }
